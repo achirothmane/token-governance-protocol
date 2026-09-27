@@ -48,3 +48,8 @@ atomicity.
 A production control plane MUST make the availability check and reservation
 mutation atomically in the authoritative budget store. Two concurrent callers
 must not both spend the same remaining capacity.
+
+
+The CI workflow used to verify this reference implementation is anchored on
+the default branch so pull-request checks cannot be introduced and trusted by
+the same unverified change.
