@@ -219,6 +219,17 @@ def validate_budget_reservation(
     if artifact.get("status") != "RESERVED" or artifact.get("protocol_state") != "ACTIVE":
         raise BudgetReservationError("BUDGET_RESERVATION_INACTIVE")
 
+    # Integrity is checked before interpreting mutable numeric semantics.
+    # A modified artifact must be classified as tampered rather than as a
+    # legitimate but malformed reservation.
+    integrity = artifact.get("integrity")
+    if not isinstance(integrity, dict) or integrity.get("algorithm") != "sha256":
+        raise BudgetReservationError("BUDGET_INTEGRITY_INVALID")
+    unsigned = dict(artifact)
+    unsigned.pop("integrity", None)
+    if integrity.get("digest") != _digest(unsigned):
+        raise BudgetReservationError("BUDGET_INTEGRITY_INVALID")
+
     requested = artifact.get("requested")
     reserved = artifact.get("reserved")
     hard_limit = artifact.get("hard_limit")
@@ -238,14 +249,6 @@ def validate_budget_reservation(
         raise BudgetReservationError("BUDGET_RESERVATION_CONSERVATION_INVALID")
     if hard_limit < reserved:
         raise BudgetReservationError("BUDGET_RESERVATION_LIMIT_INVALID")
-
-    integrity = artifact.get("integrity")
-    if not isinstance(integrity, dict) or integrity.get("algorithm") != "sha256":
-        raise BudgetReservationError("BUDGET_INTEGRITY_INVALID")
-    unsigned = dict(artifact)
-    unsigned.pop("integrity", None)
-    if integrity.get("digest") != _digest(unsigned):
-        raise BudgetReservationError("BUDGET_INTEGRITY_INVALID")
 
     if execution_ref is not None and artifact.get("execution_ref") != execution_ref:
         raise BudgetReservationError("BUDGET_EXECUTION_MISMATCH")
