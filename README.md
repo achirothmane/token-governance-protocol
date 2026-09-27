@@ -6,7 +6,7 @@ The protocol treats tokens as a governed resource rather than an unbounded imple
 
 > **No governed execution may consume an unreserved token budget.**
 
-This repository currently defines the protocol surface only. It does not yet provide a production runtime.
+This repository defines the protocol surface and now includes a small deterministic Python reference implementation for reservation decisions. It is **not** a distributed production control plane: authoritative runtimes must still make reservation checks and mutations atomically.
 
 ## Why this exists
 
@@ -51,14 +51,15 @@ token-governance-protocol/
 │   ├── reservation-semantics.md
 │   └── exhaustion-policy.md
 ├── src/
+│   └── token_governance_protocol/
 └── tests/
 ```
 
 ## Status
 
-**Early protocol draft.**
+**Draft 0.1 + reference reservation implementation.**
 
-The current objective is to make the semantics precise before choosing an implementation language or persistence layer.
+The protocol semantics remain provider-agnostic. The Python implementation exists to prove the reservation contract and Evidence-before-Action interoperability before choosing a production persistence/concurrency architecture.
 
 ## Design principles
 
@@ -94,3 +95,20 @@ Supporting semantics:
 - [Budget model](./docs/budget-model.md)
 - [Reservation semantics](./docs/reservation-semantics.md)
 - [Exhaustion policy](./docs/exhaustion-policy.md)
+
+
+## Reference implementation
+
+Install the reference package from a checkout:
+
+```bash
+python -m pip install -e '.[test]'
+pytest -q
+```
+
+The implementation exposes a pure reservation evaluator over an authoritative
+`BudgetSnapshot`. A granted request emits an
+`eba.integration/v0.1` `BudgetReservation` artifact with SHA-256 integrity
+and bindings to the principal and execution reference.
+
+See [EBA BudgetReservation profile](./docs/eba-budget-reservation.md).
