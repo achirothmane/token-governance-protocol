@@ -6,8 +6,11 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from .canonical import canonical_json_bytes as _canonical_json_bytes
+
 CONTRACT_VERSION = "eba.integration/v0.1"
 TEMPORAL_PROFILE_VERSION = "eba.temporal/v1"
+CANONICAL_PROFILE_VERSION = "eba.canonical-json/v1"
 RESERVATION_KIND = "BudgetReservation"
 
 OPEN = "OPEN"
@@ -49,12 +52,7 @@ def _parse_time(
 
 
 def canonical_json_bytes(value: dict[str, Any]) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+    return _canonical_json_bytes(value, error=BudgetReservationError)
 
 
 def _digest(value: dict[str, Any]) -> str:
@@ -246,6 +244,8 @@ def validate_budget_reservation(
         raise BudgetReservationError("BUDGET_RESERVATION_INACTIVE")
     if artifact.get("temporal_profile") not in {None, TEMPORAL_PROFILE_VERSION}:
         raise BudgetReservationError("BUDGET_TEMPORAL_PROFILE_INVALID")
+    if artifact.get("canonical_profile") != CANONICAL_PROFILE_VERSION:
+        raise BudgetReservationError("BUDGET_CANONICAL_PROFILE_INVALID")
 
     # Integrity is checked before interpreting mutable numeric semantics.
     # A modified artifact must be classified as tampered rather than as a
