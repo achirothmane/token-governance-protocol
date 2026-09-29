@@ -119,6 +119,96 @@ def test_expired_budget_blocks():
     assert result.reason == "BUDGET_EXPIRED"
 
 
+
+
+def test_budget_exact_expiry_blocks():
+    result = reserve(
+        _budget(valid_until=NOW),
+        _request(),
+        trace_id="tr_1",
+        created_at=NOW,
+    )
+    assert result.decision == BLOCK
+    assert result.reason == "BUDGET_EXPIRED"
+
+
+def test_reservation_inherits_finite_budget_expiry():
+    artifact = reserve(
+        _budget(valid_until="2026-09-27T18:00:00Z"),
+        _request(),
+        trace_id="tr_1",
+        created_at=NOW,
+    ).reservation
+    assert artifact is not None
+    assert artifact["expires_at"] == "2026-09-27T18:00:00Z"
+
+
+def test_requested_reservation_expiry_is_capped_by_budget():
+    artifact = reserve(
+        _budget(valid_until="2026-09-27T18:00:00Z"),
+        _request(),
+        trace_id="tr_1",
+        created_at=NOW,
+        expires_at="2026-09-27T19:00:00Z",
+    ).reservation
+    assert artifact is not None
+    assert artifact["expires_at"] == "2026-09-27T18:00:00Z"
+
+
+def test_unbounded_budget_requires_finite_reservation_expiry():
+    with pytest.raises(BudgetReservationError, match="RESERVATION_EXPIRES_AT_MISSING"):
+        reserve(
+            _budget(valid_until=None),
+            _request(),
+            trace_id="tr_1",
+            created_at=NOW,
+        )
+
+
+def test_reservation_exact_expiry_is_rejected():
+    artifact = reserve(
+        _budget(),
+        _request(),
+        trace_id="tr_1",
+        created_at=NOW,
+        expires_at="2026-09-27T17:05:00Z",
+    ).reservation
+    assert artifact is not None
+    with pytest.raises(BudgetReservationError, match="RESERVATION_EXPIRED"):
+        validate_budget_reservation(
+            artifact,
+            now="2026-09-27T17:05:00Z",
+        )
+
+
+def test_malformed_reservation_expiry_is_rejected():
+    artifact = reserve(
+        _budget(),
+        _request(),
+        trace_id="tr_1",
+        created_at=NOW,
+    ).reservation
+    assert artifact is not None
+    malformed = copy.deepcopy(artifact)
+    malformed["expires_at"] = 123
+    import hashlib, json
+    unsigned = dict(malformed)
+    unsigned.pop("integrity", None)
+    malformed["integrity"] = {
+        "algorithm": "sha256",
+        "digest": hashlib.sha256(
+            json.dumps(
+                unsigned,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    with pytest.raises(BudgetReservationError, match="RESERVATION_EXPIRES_AT_INVALID"):
+        validate_budget_reservation(malformed, now=NOW)
+
+
 def test_invalid_budget_invariant_is_rejected():
     with pytest.raises(BudgetReservationError, match="INVARIANT"):
         reserve(
