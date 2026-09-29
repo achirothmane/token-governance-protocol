@@ -197,6 +197,7 @@ def reserve(
         "contract_version": CONTRACT_VERSION,
         "kind": RESERVATION_KIND,
         "temporal_profile": TEMPORAL_PROFILE_VERSION,
+        "canonical_profile": CANONICAL_PROFILE_VERSION,
         "trace_id": trace_id,
         "producer": "token-governance-protocol",
         "created_at": timestamp,
