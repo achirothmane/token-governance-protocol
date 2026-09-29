@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 CONTRACT_VERSION = "eba.integration/v0.1"
+TEMPORAL_PROFILE_VERSION = "eba.temporal/v1"
 RESERVATION_KIND = "BudgetReservation"
 
 OPEN = "OPEN"
@@ -26,15 +27,24 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _parse_time(value: str | None) -> datetime | None:
+def _parse_time(
+    value: Any,
+    *,
+    field: str,
+    allow_none: bool = True,
+) -> datetime | None:
     if value is None:
-        return None
+        if allow_none:
+            return None
+        raise BudgetReservationError(f"{field.upper()}_MISSING")
+    if not isinstance(value, str) or not value:
+        raise BudgetReservationError(f"{field.upper()}_INVALID")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise BudgetReservationError(f"invalid timestamp: {value!r}") from exc
+        raise BudgetReservationError(f"{field.upper()}_INVALID") from exc
     if parsed.tzinfo is None:
-        raise BudgetReservationError("timestamps must include timezone information")
+        raise BudgetReservationError(f"{field.upper()}_INVALID")
     return parsed.astimezone(timezone.utc)
 
 
@@ -108,7 +118,7 @@ def _validate_budget(snapshot: BudgetSnapshot) -> None:
         raise BudgetReservationError("BUDGET_INVARIANT_VIOLATION")
     if snapshot.status not in {OPEN, EXHAUSTED, CLOSED, REVOKED}:
         raise BudgetReservationError("invalid budget status")
-    _parse_time(snapshot.valid_until)
+    _parse_time(snapshot.valid_until, field="budget_valid_until")
 
 
 def _validate_request(request: ReservationRequest) -> None:
@@ -142,9 +152,9 @@ def reserve(
         raise BudgetReservationError("trace_id is required")
 
     timestamp = created_at or _utc_now()
-    now = _parse_time(timestamp)
+    now = _parse_time(timestamp, field="created_at", allow_none=False)
     assert now is not None
-    budget_expiry = _parse_time(snapshot.valid_until)
+    budget_expiry = _parse_time(snapshot.valid_until, field="budget_valid_until")
 
     reason: str | None = None
     if snapshot.status == REVOKED:
@@ -153,7 +163,7 @@ def reserve(
         reason = "BUDGET_CLOSED"
     elif snapshot.status == EXHAUSTED:
         reason = "BUDGET_EXHAUSTED"
-    elif budget_expiry is not None and now > budget_expiry:
+    elif budget_expiry is not None and now >= budget_expiry:
         reason = "BUDGET_EXPIRED"
     elif request.requested_amount > snapshot.available:
         reason = "INSUFFICIENT_BUDGET"
@@ -167,12 +177,28 @@ def reserve(
             reservation=None,
         )
 
+    requested_expiry = _parse_time(
+        expires_at,
+        field="reservation_expires_at",
+        allow_none=True,
+    )
+    effective_expiry = requested_expiry
+    if budget_expiry is not None and (
+        effective_expiry is None or effective_expiry > budget_expiry
+    ):
+        effective_expiry = budget_expiry
+    if effective_expiry is None:
+        raise BudgetReservationError("RESERVATION_EXPIRES_AT_MISSING")
+    if effective_expiry <= now:
+        raise BudgetReservationError("RESERVATION_WINDOW_INVALID")
+
     after = replace(snapshot, reserved=snapshot.reserved + request.requested_amount)
     _validate_budget(after)
 
     artifact: dict[str, Any] = {
         "contract_version": CONTRACT_VERSION,
         "kind": RESERVATION_KIND,
+        "temporal_profile": TEMPORAL_PROFILE_VERSION,
         "trace_id": trace_id,
         "producer": "token-governance-protocol",
         "created_at": timestamp,
@@ -189,7 +215,7 @@ def reserve(
         "available_after": after.available,
         "status": "RESERVED",
         "protocol_state": "ACTIVE",
-        "expires_at": expires_at,
+        "expires_at": effective_expiry.isoformat(timespec="seconds").replace("+00:00", "Z"),
     }
     artifact["id"] = _stable_id("budget", artifact)
     artifact = _with_integrity(artifact)
@@ -218,6 +244,8 @@ def validate_budget_reservation(
         raise BudgetReservationError("BUDGET_TYPE_INVALID")
     if artifact.get("status") != "RESERVED" or artifact.get("protocol_state") != "ACTIVE":
         raise BudgetReservationError("BUDGET_RESERVATION_INACTIVE")
+    if artifact.get("temporal_profile") not in {None, TEMPORAL_PROFILE_VERSION}:
+        raise BudgetReservationError("BUDGET_TEMPORAL_PROFILE_INVALID")
 
     # Integrity is checked before interpreting mutable numeric semantics.
     # A modified artifact must be classified as tampered rather than as a
@@ -255,9 +283,17 @@ def validate_budget_reservation(
     if principal_id is not None and artifact.get("principal_id") != principal_id:
         raise BudgetReservationError("BUDGET_PRINCIPAL_MISMATCH")
 
-    expires_at = _parse_time(artifact.get("expires_at"))
+    expires_at = _parse_time(
+        artifact.get("expires_at"),
+        field="reservation_expires_at",
+        allow_none=False,
+    )
     if expires_at is not None:
-        current = _parse_time(now or _utc_now())
+        current = _parse_time(
+            now or _utc_now(),
+            field="evaluation_time",
+            allow_none=False,
+        )
         assert current is not None
-        if current > expires_at:
+        if current >= expires_at:
             raise BudgetReservationError("BUDGET_RESERVATION_EXPIRED")
